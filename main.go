@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -24,73 +25,64 @@ const (
 	privateKey = "56289e99c94b6912bfc12adc093c9b51124f0dc54ac7a766b2bc5ccf558d8027"
 )
 
+type TestObject struct {
+	
+}
+
 var addr common.Address = common.HexToAddress("0x4Ac1d98D9cEF99EC6546dEd4Bd550b0b287aaD6D")
 
 const contractABI = `[
   {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "_addition",
-        "type": "string"
-      }
-    ],
+    "type": "function",
     "name": "addMessage",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "getMessage",
-    "outputs": [
-      {
-        "internalType": "string",
-        "name": "",
-        "type": "string"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "k",
-    "outputs": [
-      {
-        "internalType": "int256",
-        "name": "",
-        "type": "int256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "message",
-    "outputs": [
-      {
-        "internalType": "string",
-        "name": "",
-        "type": "string"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "_newMessage",
-        "type": "string"
+        "name": "_addition",
+        "type": "string",
+        "internalType": "string"
       }
     ],
-    "name": "setMessage",
     "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getMessage",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "message",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "setMessage",
+    "inputs": [
+      {
+        "name": "_newMessage",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
   }
 ]`
 
@@ -122,32 +114,32 @@ func getHelloWorld(client *ethclient.Client) (string, error) {
 	return message, nil
 }
 
-func setMessage(client *ethclient.Client, x string) error {
+func setMessage(client *ethclient.Client, x string) (*types.Receipt, error) {
 	parsedABI, err := abi.JSON(strings.NewReader(contractABI))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	data, err := parsedABI.Pack("setMessage", x)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	privateKey, err := crypto.HexToECDSA(privateKey)
 	if err != nil {
-		return fmt.Errorf("failed to parse private key: %v", err)
+		return nil, fmt.Errorf("failed to parse private key: %v", err)
 	}
 	publicKey := privateKey.Public()
 	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
 	if !ok {
-		return fmt.Errorf("error casting public key to ECDSA")
+		return nil, fmt.Errorf("error casting public key to ECDSA")
 	}
 	fromAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
 	nonce, err := client.PendingNonceAt(context.Background(), fromAddress)
 	if err != nil {
-		return fmt.Errorf("failed to get nonce: %v", err)
+		return nil, fmt.Errorf("failed to get nonce: %v", err)
 	}
 	gasPrice, err := client.SuggestGasPrice(context.Background())
 	if err != nil {
-		return fmt.Errorf("failed to get gas price: %v", err)
+		return nil, fmt.Errorf("failed to get gas price: %v", err)
 	}
 	gasLimit, err := client.EstimateGas(context.Background(), ethereum.CallMsg{
 		From: fromAddress,
@@ -165,19 +157,25 @@ func setMessage(client *ethclient.Client, x string) error {
 		gasPrice,
 		data,
 	)
+
 	chainID, err := client.ChainID(context.Background())
 	if err != nil {
-		return fmt.Errorf("failed to get chain ID: %v", err)
+		return nil, fmt.Errorf("failed to get chain ID: %v", err)
 	}
 	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), privateKey)
 	if err != nil {
-		return fmt.Errorf("failed to sign transaction: %v", err)
+		return nil, fmt.Errorf("failed to sign transaction: %v", err)
 	}
 	err = client.SendTransaction(context.Background(), signedTx)
 	if err != nil {
-		return fmt.Errorf("failed to send transaction: %v", err)
+		return nil, fmt.Errorf("failed to send transaction: %v", err)
 	}
-	return nil
+	time.Sleep(1 * time.Second)
+	info, err := client.TransactionReceipt(context.Background(), signedTx.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get receipt: %#+v", err)
+	}
+	return info, nil
 }
 
 func main() {
@@ -216,17 +214,29 @@ func main() {
 			http.Error(w, `{error:"expected json"}`, http.StatusBadRequest)
 			return
 		}
-		err = setMessage(client, x["NewWord"])
+		info, err := setMessage(client, x["NewWord"])
 		if err != nil {
-			http.Error(w, `{error:"unexpected behaviour of subnet"}`, http.StatusBadGateway)
+			http.Error(w, fmt.Sprintf(`{error:"unexpected behaviour of subnet:%v"}`, err), http.StatusBadGateway)
 			return
 		}
+		res := parseReceipt(info)
 		w.WriteHeader(200)
-		w.Write([]byte("created"))
+		w.Write([]byte(res))
 		return
 	}
 
 	http.HandleFunc("/", x)
 	http.HandleFunc("/setstring", y)
 	http.ListenAndServe(":8080", nil)
+}
+
+func parseReceipt(rec *types.Receipt) string {
+	return fmt.Sprintf(
+		"TxHash:%s\nContractAddress:%s\nGasUsed:%d\nBlockHash:%s\nBlockNumber:%s\nTransactionIndex:%d\n",
+		rec.TxHash,
+		rec.ContractAddress.String(),
+		rec.GasUsed,
+		rec.BlockHash.String(),
+		rec.BlockNumber.String(),
+		rec.TransactionIndex)
 }
